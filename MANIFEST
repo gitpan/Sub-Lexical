@@ -1,5 +1,8 @@
-Changes
 Lexical.pm
 Makefile.PL
-MANIFEST
 test.pl
+ChangeLog
+README
+t/02complex.t
+t/01basic.t
+MANIFEST

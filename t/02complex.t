@@ -17,7 +17,7 @@ my $f = $pkg->new();
 # no. 3
 ok($f,					'constructor ok');
 
-# no. 4,5
+# no. 4,5,6
 {
 	my $var;
 	eval $f->filter_code(q(

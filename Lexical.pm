@@ -2,9 +2,10 @@
 
 package Sub::Lexical;
 
-$VERSION = 0.8;
+$VERSION = 0.81;
 
 use strict;
+eval q(use warnings) or local $^W = 1;
 
 use Regexp::Common;
 use Carp qw(croak cluck);
@@ -12,23 +13,23 @@ use Carp qw(croak cluck);
 use constant DEBUG  => 1;
 
 sub new {
-	my $class	= shift;
-	croak('Sub::Lexical constructor must be called as a class method')
-		if $class ne 'Sub::Lexical';
+  my $class	= shift;
+  croak('Sub::Lexical constructor must be called as a class method')
+    if $class ne __PACKAGE__;
 
-	cluck("arguments passed to new() aren't in pair form")
-		if @_ % 2 != 0;
+  cluck("arguments passed to new() aren't in pair form")
+    if @_ % 2 != 0;
 
-	## don't stuff list in if it don't fit
-	my $self	= { @_ % 2 == 0 ? @_ : () };
-	
-	bless($self, $class);
+  ## don't stuff list in if it don't fit
+  my $self	= { @_ % 2 == 0 ? @_ : () };
+
+  bless($self, $class);
 }
 
 sub subs_found {
-	my $self = shift;
-	return undef unless defined $self->{info};
-	return $self->{info};
+  my $self = shift;
+  return [] unless defined $self->{info};
+  return $self->{info};
 }
 
 my $brackets_re     = $RE{balanced}{-parens => '{}'};
@@ -64,68 +65,63 @@ my $sub_match_re    = qr/
 
 ## core functions which may expect a function e.g goto &foo
 my $core_funcs    = join '|', qw(do defined eval goto grep map sort undef);
-## things that *can't* come before a bareword
-my $ops_before    = qr/(?<! \$ | % | @ | ' | " ) |
-					   (?>! \b q. | -> ) |
-					   (?>! \b q[ ]\w | \b qq. ) |
-					   (?>! \b qq[ ]\w )/x;
+## things that *can't* come before or go after a bareword
+my $ops_before    = qr/(?<! \$ | % | @ ) | (?>! -> )/x;
 
 sub filter_code {
-	my $self = shift;
-	croak('filter_code() must be called as an object method')
-		unless $self->isa('Sub::Lexical');
+  my $self = shift;
+  croak('filter_code() must be called as an object method')
+    if not defined $self or $self eq __PACKAGE__;
 
-	my $code = shift;
-    study $code;
+  my $code = shift;
+  study $code;
 
-    while(my($subname, $subextra, $subcode) = $code =~ /$sub_match_re/) { 
-		push @{$self->{info}}, {
-			name	=> $subname,
-			extra	=> $subextra,
-			code	=> $subcode
-		};
+  while(my($subname, $subextra, $subcode) = $code =~ /$sub_match_re/) {
+    push @{$self->{info}}, {
+        name    => $subname,
+        extra   => $subextra,
+        code    => $subcode
+    };
 
-        my $lexname = "\$LEXSUB_${subname}";
-        ## 'my sub name {}' => 'my $name; $name = sub {};'
-        $code =~ s<$sub_match_re>
-                  <my \$LEXSUB_$1; \$LEXSUB_$1 = sub $2 $3;>g;
+    my $lexname = "\$LEXSUB_${subname}";
+    ## 'my sub name {}' => 'my $name; $name = sub {};'
+    $code =~ s<$sub_match_re>
+              <my \$LEXSUB_$1; \$LEXSUB_$1 = sub $2 $3;>g;
 
-        ## '&name()' => '$name->()'
-        $code =~ s<
-                    &?               # optional &
-                    $subname         # 'subname'
-                    \s*              # 0+ whitespace
-                    (                # group $1
-                        $paren_re    # balanced parens
-                    )                # optional group $1
-                 >{"$lexname->" . ($1 || '()')}exg;
+    ## '&name()' => '$name->()'
+    $code =~ s<
+                &?               # optional &
+                $subname         # 'subname'
+                \s*              # 0+ whitespace
+                (                # group $1
+                    $paren_re    # balanced parens
+                )                # optional group $1
+             >{"$lexname->" . ($1 || '()')}exg;
 
-        ## 'goto &name' => 'goto &$name'
-        $code =~ s<($core_funcs) \s* &$subname\b>
-                  <$1 &$lexname>xg;
+    ## 'goto &name' => 'goto &$name'
+    $code =~ s<($core_funcs) \s* &$subname\b>
+              {$1 &$lexname}xg;
 
-        ## '&name' => '$name->(@_)'
-        $code =~ s{ (?<!\\) &$subname\b}
-                  {$lexname->(\@_)}xg;
+    ## '&name' => '$name->(@_)'
+    $code =~ s{ (?<!\\) \s* &$subname\b }
+              {$lexname->(\@_)}xg;
 
-        ## '\&name' => '$name'
-        $code =~ s<\\ \s* &($sub_name_re)\b>
-                  <\$LEXSUB_$1>xg;
+    ## '\&name' => '$name'
+    $code =~ s<(?: \\ \s*)+ &($sub_name_re)\b>
+              <\$LEXSUB_$1>xg;
 
-		## 'name' => '$name->()'
-        $code =~ s{(?: ^ | (?<! LEXSUB_) ( (?: $ops_before | \s+) \s* ) )
-                   $subname \b }
-                  {$1$lexname->()}xmg;
-	}
-
-	return $code;
+    ## 'name' => '$name->()'
+    $code =~ s{(?: ^ | (?<! LEXSUB_) ( (?: $ops_before | \s+) \s* ) )
+               $subname \b }
+              {$1$lexname->()}xmg;
+  }
+  return $code;
 }
 
 use Filter::Simple;
 
 FILTER_ONLY code => sub {
-	my $filter = Sub::Lexical->new();
-	$_ = $filter->filter_code($_);
+  $_ = Sub::Lexical->new()->filter_code($_);
 };
 
 q(package activated);
@@ -140,29 +136,29 @@ Sub::Lexical - implements lexically scoped subroutines
 
 =head1 SYNOPSIS
 
-use Sub::Lexical;
+  use Sub::Lexical;
 
-    sub foo {
-        my @vals = @_;
-    
-        my sub bar {
-            my $arg = shift;
-            print "\$arg is $arg\n";
-            print "\$vals are @vals\n";
-        }
-        
-        bar("just a string");
-    
-        my sub quux (@) {
-            print "quux got args [@_]\n";
-        }
-    
-        takesub(\&quux, qw(ichi ni san shi));
-    }
+  sub foo {
+      my @vals = @_;
 
-    sub takesub { print "executing given sub\n\t"; shift->(@_[1..$#_]) }
+      my sub bar {
+          my $arg = shift;
+          print "\$arg is $arg\n";
+          print "\$vals are @vals\n";
+      }
 
-    foo(qw(a bunch of args));
+      bar("just a string");
+
+      my sub quux (@) {
+          print "quux got args [@_]\n";
+      }
+
+      takesub(\&quux, qw(ichi ni san shi));
+  }
+
+  sub takesub { print "executing given sub\n\t"; shift->(@_[1..$#_]) }
+
+  foo(qw(a bunch of args));
 
 =head1 DESCRIPTION
 
@@ -175,7 +171,11 @@ They can see other lexically scoped variables and subs, and will fall out of
 scope like they should. You can pass them around like coderefs, give them
 attributes and prototypes too if you're feeling brave. Another advantage is
 you can use them as B<truly> private methods in packages, thereby realising
-the dream of true encapsulation so many have, er, dreamed of ;-)
+the dream of true encapsulation so many have dreamed of.
+
+Your code will be automatically parsed on include (this is a filter module
+after all) so the methods listed below are provided so you can filter your own
+code manually.
 
 =head1 METHODS
 
@@ -190,21 +190,21 @@ class method at the moment
 
 Returns an ArOH of the form
 
-	[
-		{
-			'code' => '{ ... }',
-			'extra' => '',
-			'name' => 'foo'
-		}
-	]
+  [
+    {
+    'code' => '{ ... }',
+    'extra' => '() : attrib',
+    'name' => 'foo'
+    }
+  ]
 
 =item filter_code
 
 It takes one argument which is the code to be filtered and returns a copy
 of that code filtered e.g
 
-	my $f = Sub::Lexical->new();
-	$filtered = $f->filter_code($code);
+  my $f = Sub::Lexical->new();
+  $filtered = $f->filter_code($code);
 
 =back
 
@@ -217,7 +217,7 @@ of that code filtered e.g
 If you have a sub called foo it will clash with any variable called
 LEXSUB_foo within the same scope, as all subs have 'LEXSUB_' appended
 to them so as to avoid namespace clashes with other variables (any
-suggestions for a nicer workaround are very much welcome).
+suggestions for a cleaner workaround are very much welcome).
 
 =back
 
@@ -231,7 +231,7 @@ Damian Conway and PerlMonks for giving me the skills and resources to write this
 
 =head1 AUTHOR
 
-by Dan Brook <broquaint@hotmail.com>
+by Dan Brook C<E<lt>broquaint@hotmail.comE<gt>>
 
 =head1 COPYRIGHT
 
